@@ -14,6 +14,7 @@ struct SimUniforms {
 @group(0) @binding(8) var<storage, read> materialImmovable: array<u32>;
 @group(0) @binding(9) var<storage, read> materialMatterState: array<u32>;
 @group(0) @binding(10) var<storage, read> materialSpreadChance: array<f32>;
+@group(0) @binding(11) var<storage, read> materialDensity: array<f32>;
 
 const EMPTY: u32 = 0u;
 const MAX_STEPS: u32 = 8u;
@@ -340,12 +341,22 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     // Nothing worked - genuine dead stop against the particle directly
-    // below. Resolve as a soft (perfectly inelastic, equal-mass) two-way
-    // momentum exchange instead of a hard freeze.
+    // below. Resolve as a soft, perfectly inelastic two-way momentum
+    // exchange instead of a hard freeze - mass-weighted by density
+    // (conservation of momentum: m1*v1 + m2*v2 = (m1+m2)*vFinal), not a
+    // flat 50/50 split, so a dense material (lead, gold) dominates a
+    // collision with a light one (styrofoam, ash) instead of splitting
+    // evenly. Reduces to the exact old 50/50 formula when densities
+    // match, so this is a strict generalization, not a behavior change
+    // for same-material collisions.
     blocked = true;
     let blockerIdx = straightClaim.blocker;
     let vBottom = velocities[blockerIdx].y; // benign read race - see plan notes
-    let vFinal = (vel.y + vBottom) * 0.5;
+    let blockerMaterial = materials[blockerIdx]; // same benign-read category
+    let myDensity = materialDensity[material];
+    let theirDensity = materialDensity[blockerMaterial];
+    let totalDensity = myDensity + theirDensity;
+    let vFinal = (myDensity * vel.y + theirDensity * vBottom) / totalDensity;
     vel.y = vFinal; // our own half applies immediately (own slot, no race)
     queueVelocityDelta(blockerIdx, vFinal - vBottom); // their half, deferred
     break;

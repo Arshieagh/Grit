@@ -67,6 +67,11 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     label: 'Material Spread Chance Table',
   });
+  const materialDensityBuffer = createBuffer(device, {
+    data: Float32Array.from(materials, (m) => m.density),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    label: 'Material Density Table',
+  });
 
   const bindGroupLayout = device.createBindGroupLayout({
     entries: [
@@ -81,6 +86,7 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
       { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
       { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
       { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
     ],
   });
 
@@ -98,6 +104,7 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
       { binding: 8, resource: { buffer: materialImmovableBuffer } },
       { binding: 9, resource: { buffer: materialMatterStateBuffer } },
       { binding: 10, resource: { buffer: materialSpreadChanceBuffer } },
+      { binding: 11, resource: { buffer: materialDensityBuffer } },
     ],
   });
 
