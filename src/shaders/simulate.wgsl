@@ -13,6 +13,7 @@ struct SimUniforms {
 @group(0) @binding(7) var<storage, read> materialFriction: array<f32>;
 @group(0) @binding(8) var<storage, read> materialImmovable: array<u32>;
 @group(0) @binding(9) var<storage, read> materialMatterState: array<u32>;
+@group(0) @binding(10) var<storage, read> materialSpreadChance: array<f32>;
 
 const EMPTY: u32 = 0u;
 const MAX_STEPS: u32 = 8u;
@@ -299,27 +300,37 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     // (water, oil, lava, etc.) gets this, not just literally "water".
     // Reuses the same hash-ordered left/right candidates computed above
     // (column bounds don't depend on which row we're checking).
+    //
+    // Gated by materialSpreadChance (derived from viscosity in
+    // computePipeline.js): thick liquids like honey/tar/lava resist
+    // spreading, thin ones like water spread almost every attempt.
+    // Uses a DIFFERENT hash seed from the left/right ordering above, so
+    // "should I spread at all" and "which side first" don't correlate.
     if (!slipped && materialMatterState[material] == MATTER_LIQUID) {
-      if (firstValid) {
-        let sideIdx = cellY * u32(cols) + u32(firstX);
-        let sideClaim = tryClaim(sideIdx, i + 1u);
-        if (sideClaim.claimed) {
-          atomicStore(&grid[currentIdx], EMPTY);
-          currentIdx = sideIdx;
-          cellX = u32(firstX);
-          pos.x = (f32(cellX) + 0.5) * cellSize;
-          slipped = true;
+      let spreadChance = materialSpreadChance[material];
+      let spreadRoll = f32(hash_u32(i ^ (frameCount * 0x2545F491u))) / 4294967295.0;
+      if (spreadRoll <= spreadChance) {
+        if (firstValid) {
+          let sideIdx = cellY * u32(cols) + u32(firstX);
+          let sideClaim = tryClaim(sideIdx, i + 1u);
+          if (sideClaim.claimed) {
+            atomicStore(&grid[currentIdx], EMPTY);
+            currentIdx = sideIdx;
+            cellX = u32(firstX);
+            pos.x = (f32(cellX) + 0.5) * cellSize;
+            slipped = true;
+          }
         }
-      }
-      if (!slipped && secondValid) {
-        let sideIdx = cellY * u32(cols) + u32(secondX);
-        let sideClaim = tryClaim(sideIdx, i + 1u);
-        if (sideClaim.claimed) {
-          atomicStore(&grid[currentIdx], EMPTY);
-          currentIdx = sideIdx;
-          cellX = u32(secondX);
-          pos.x = (f32(cellX) + 0.5) * cellSize;
-          slipped = true;
+        if (!slipped && secondValid) {
+          let sideIdx = cellY * u32(cols) + u32(secondX);
+          let sideClaim = tryClaim(sideIdx, i + 1u);
+          if (sideClaim.claimed) {
+            atomicStore(&grid[currentIdx], EMPTY);
+            currentIdx = sideIdx;
+            cellX = u32(secondX);
+            pos.x = (f32(cellX) + 0.5) * cellSize;
+            slipped = true;
+          }
         }
       }
     }
