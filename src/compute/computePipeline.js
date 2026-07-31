@@ -1,6 +1,6 @@
 import { createBuffer } from '../gpu/buffers.js';
 
-export async function createComputePipeline(device, { positionBuffer, velocityBuffer, remainderBuffer, gridBuffer, maxParticles, cellSize, cols, rows, gravity }) {
+export async function createComputePipeline(device, { positionBuffer, velocityBuffer, remainderBuffer, materialBuffer, gridBuffer, maxParticles, cellSize, cols, rows, gravity }) {
   const shaderCode = await fetch('/src/shaders/simulate.wgsl').then((res) => res.text());
   const shaderModule = device.createShaderModule({ code: shaderCode });
 
@@ -26,6 +26,7 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
       { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
     ],
   });
 
@@ -38,6 +39,7 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
       { binding: 3, resource: { buffer: remainderBuffer } },
       { binding: 4, resource: { buffer: gridBuffer } },
       { binding: 5, resource: { buffer: velocityDeltaBuffer } },
+      { binding: 6, resource: { buffer: materialBuffer } },
     ],
   });
 

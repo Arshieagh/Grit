@@ -39,7 +39,7 @@ async function main() {
     height: canvas.height,
     cellSize: PARTICLE_SIZE,
   });
-  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, spawnBrush } = particleSystem;
+  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, materialBuffer, gridBuffer, cols, rows, spawnBrush } = particleSystem;
 
   const renderPipeline = await createRenderPipeline(device, format, {
     positionBuffer,
@@ -53,6 +53,7 @@ async function main() {
     positionBuffer,
     velocityBuffer,
     remainderBuffer,
+    materialBuffer,
     gridBuffer,
     maxParticles: MAX_PARTICLES,
     cellSize: PARTICLE_SIZE,
@@ -77,6 +78,7 @@ async function main() {
     cellSize: PARTICLE_SIZE,
     getBrushRadius: controls.getBrushRadius,
     getBrushColor: controls.getBrushColor,
+    getBrushMaterialId: controls.getBrushMaterialId,
   });
 
   const adapterInfo = adapter?.info

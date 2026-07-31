@@ -33,6 +33,7 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
   const colors = new Float32Array(maxParticles * 4);
   const velocities = new Float32Array(maxParticles * 2);
   const remainders = new Float32Array(maxParticles * 2);
+  const materials = new Uint32Array(maxParticles);
   const occupancy = new Uint32Array(cols * rows);
   const occupancyShadow = new Uint8Array(cols * rows);
 
@@ -77,6 +78,11 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
     data: remainders,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     label: 'Particle Remainders',
+  });
+  const materialBuffer = createBuffer(device, {
+    data: materials,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    label: 'Particle Materials',
   });
   const gridBuffer = createBuffer(device, {
     data: occupancy,
@@ -124,7 +130,7 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
     return activeCount;
   }
 
-  function spawnParticle(cellX, cellY, color) {
+  function spawnParticle(cellX, cellY, color, materialId) {
     if (activeCount >= maxParticles) {
       return 'capacity';
     }
@@ -146,6 +152,7 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
     device.queue.writeBuffer(velocityBuffer, slot * 8, new Float32Array([0, 0]));
     device.queue.writeBuffer(remainderBuffer, slot * 8, new Float32Array([0, 0]));
     device.queue.writeBuffer(colorBuffer, slot * 16, new Float32Array(jitteredColor(color)));
+    device.queue.writeBuffer(materialBuffer, slot * 4, new Uint32Array([materialId]));
     device.queue.writeBuffer(gridBuffer, cellIndex * 4, new Uint32Array([slot + 1]));
 
     occupancyShadow[cellIndex] = 1;
@@ -153,7 +160,7 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
     return 'ok';
   }
 
-  function spawnBrush(centerX, centerY, radius, color) {
+  function spawnBrush(centerX, centerY, radius, color, materialId) {
     let spawned = 0;
     let lastRejection = null;
     const r2 = radius * radius;
@@ -163,7 +170,7 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
         if (dx * dx + dy * dy > r2) {
           continue;
         }
-        const result = spawnParticle(centerX + dx, centerY + dy, color);
+        const result = spawnParticle(centerX + dx, centerY + dy, color, materialId);
         if (result === 'ok') {
           spawned++;
         } else {
@@ -182,5 +189,5 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
     device.queue.writeBuffer(gridBuffer, 0, occupancy);
   }
 
-  return { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, getActiveCount, spawnParticle, spawnBrush, reset, syncOccupancyShadow };
+  return { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, materialBuffer, gridBuffer, cols, rows, getActiveCount, spawnParticle, spawnBrush, reset, syncOccupancyShadow };
 }

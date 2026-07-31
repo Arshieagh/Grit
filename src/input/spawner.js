@@ -1,4 +1,4 @@
-export function createSpawnInput(canvas, { spawnBrush }, { cellSize, getBrushRadius, getBrushColor }) {
+export function createSpawnInput(canvas, { spawnBrush }, { cellSize, getBrushRadius, getBrushColor, getBrushMaterialId }) {
   let isDragging = false;
   let lastSpawnCell = null;
   let lastResult = 'none';
@@ -20,7 +20,7 @@ export function createSpawnInput(canvas, { spawnBrush }, { cellSize, getBrushRad
     if (lastSpawnCell && lastSpawnCell.x === cell.x && lastSpawnCell.y === cell.y) {
       return;
     }
-    const { spawned, lastRejection } = spawnBrush(cell.x, cell.y, getBrushRadius(), getBrushColor());
+    const { spawned, lastRejection } = spawnBrush(cell.x, cell.y, getBrushRadius(), getBrushColor(), getBrushMaterialId());
     lastResult = spawned > 0 ? 'ok' : (lastRejection || 'none');
     lastSpawnCell = cell;
   }

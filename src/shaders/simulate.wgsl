@@ -9,12 +9,18 @@ struct SimUniforms {
 @group(0) @binding(3) var<storage, read_write> remainders: array<vec2f>;
 @group(0) @binding(4) var<storage, read_write> grid: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read_write> velocityDeltaY: array<atomic<i32>>;
+@group(0) @binding(6) var<storage, read> materials: array<u32>;
 
 const EMPTY: u32 = 0u;
 const MAX_STEPS: u32 = 8u;
 // fixed-point scale for encoding f32 velocity deltas into atomic<i32>
 // (WGSL has no atomic<f32>) - see queueVelocityDelta / pending-delta pickup
 const FIXED_SCALE: f32 = 65536.0;
+
+// Material IDs - must match the index order of MATERIALS in sim/config.js
+const MATERIAL_SAND: u32 = 0u;
+const MATERIAL_STONE: u32 = 1u;
+const MATERIAL_WATER: u32 = 2u;
 
 struct ClaimResult {
   claimed: bool,
@@ -66,6 +72,14 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   let activeCount = u32(uniforms.data2.z);
   if (i >= activeCount || i >= arrayLength(&positions)) {
+    return;
+  }
+
+  let material = materials[i];
+  if (material == MATERIAL_STONE) {
+    // Immovable: stays in whatever cell it spawned in forever, still
+    // blocking other particles via the occupancy grid it already
+    // claimed at spawn time. Nothing else in this function needs to run.
     return;
   }
 
@@ -179,13 +193,43 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
       }
     }
 
+    // Water: if it can't fall straight down OR diagonally, spread
+    // sideways along its current row before settling - a looser
+    // "liquid disperses" fallback sand and stone don't get. Reuses the
+    // same hash-ordered left/right candidates computed above (column
+    // bounds don't depend on which row we're checking).
+    if (!slipped && material == MATERIAL_WATER) {
+      if (firstValid) {
+        let sideIdx = cellY * u32(cols) + u32(firstX);
+        let sideClaim = tryClaim(sideIdx, i + 1u);
+        if (sideClaim.claimed) {
+          atomicStore(&grid[currentIdx], EMPTY);
+          currentIdx = sideIdx;
+          cellX = u32(firstX);
+          pos.x = (f32(cellX) + 0.5) * cellSize;
+          slipped = true;
+        }
+      }
+      if (!slipped && secondValid) {
+        let sideIdx = cellY * u32(cols) + u32(secondX);
+        let sideClaim = tryClaim(sideIdx, i + 1u);
+        if (sideClaim.claimed) {
+          atomicStore(&grid[currentIdx], EMPTY);
+          currentIdx = sideIdx;
+          cellX = u32(secondX);
+          pos.x = (f32(cellX) + 0.5) * cellSize;
+          slipped = true;
+        }
+      }
+    }
+
     if (slipped) {
       break; // one-shot per frame - don't chain further steps after a slip
     }
 
-    // Both diagonals unavailable too - genuine dead stop against the
-    // particle directly below. Resolve as a soft (perfectly inelastic,
-    // equal-mass) two-way momentum exchange instead of a hard freeze.
+    // Nothing worked - genuine dead stop against the particle directly
+    // below. Resolve as a soft (perfectly inelastic, equal-mass) two-way
+    // momentum exchange instead of a hard freeze.
     blocked = true;
     let blockerIdx = straightClaim.blocker;
     let vBottom = velocities[blockerIdx].y; // benign read race - see plan notes
@@ -205,12 +249,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     // else: vel.y already holds the momentum-merged value set above
   } else {
     // only consume the cells we actually moved; leftover remainder
-    // (e.g. capped by MAX_STEPS) carries over to next frame
+    // (e.g. capped by MAX_STEPS, or a water horizontal spread that made
+    // no vertical progress) carries over to next frame
     rem.y -= dirY * stepsDone * cellSize;
   }
 
-  // X axis: same logic, symmetric but currently inert (diagonal slip
-  // writes pos.x directly and never touches rem.x/vel.x)
+  // X axis: same logic, symmetric but currently inert (diagonal/water
+  // slip writes pos.x directly and never touches rem.x/vel.x)
   let stepsX = floor(abs(rem.x) / cellSize);
   if (stepsX > 0.0) {
     let dirX = sign(rem.x);

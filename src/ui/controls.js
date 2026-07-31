@@ -53,5 +53,9 @@ export function createControls({ materials, defaultBrushRadius, minBrushRadius, 
     return selectedMaterial.name;
   }
 
-  return { getBrushRadius, getBrushColor, getSelectedMaterialName };
+  function getBrushMaterialId() {
+    return materials.indexOf(selectedMaterial);
+  }
+
+  return { getBrushRadius, getBrushColor, getSelectedMaterialName, getBrushMaterialId };
 }
