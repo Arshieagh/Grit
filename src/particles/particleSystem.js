@@ -1,6 +1,5 @@
 import { createBuffer } from '../gpu/buffers.js';
 
-const BASE_COLOR = [0.76, 0.7, 0.5];
 const JITTER = 0.15;
 
 function shuffledCellIndices(cols, rows) {
@@ -17,12 +16,12 @@ function shuffledCellIndices(cols, rows) {
   return cellIndices;
 }
 
-function randomColor() {
+function jitteredColor(baseColor) {
   return [
-    BASE_COLOR[0] + (Math.random() - 0.5) * JITTER,
-    BASE_COLOR[1] + (Math.random() - 0.5) * JITTER,
-    BASE_COLOR[2] + (Math.random() - 0.5) * JITTER,
-    1.0,
+    baseColor[0] + (Math.random() - 0.5) * JITTER,
+    baseColor[1] + (Math.random() - 0.5) * JITTER,
+    baseColor[2] + (Math.random() - 0.5) * JITTER,
+    baseColor[3],
   ];
 }
 
@@ -39,6 +38,7 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
 
   if (initialCount > 0) {
     const spawnCells = shuffledCellIndices(cols, rows);
+    const defaultColor = [0.76, 0.70, 0.50, 1.0];
 
     for (let i = 0; i < initialCount; i++) {
       const cellIndex = spawnCells[i];
@@ -50,7 +50,7 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
       occupancy[cellIndex] = i + 1;
       occupancyShadow[cellIndex] = 1;
 
-      const color = randomColor();
+      const color = jitteredColor(defaultColor);
       colors[i * 4] = color[0];
       colors[i * 4 + 1] = color[1];
       colors[i * 4 + 2] = color[2];
@@ -90,17 +90,20 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
     return activeCount;
   }
 
-  function spawnParticle(cellX, cellY) {
+  function spawnParticle(cellX, cellY, color) {
     if (activeCount >= maxParticles) {
-      return false;
+      console.log('[spawn] capacity', { cellX, cellY, activeCount, maxParticles });
+      return 'capacity';
     }
     if (cellX < 0 || cellX >= cols || cellY < 0 || cellY >= rows) {
-      return false;
+      console.log('[spawn] bounds', { cellX, cellY, cols, rows });
+      return 'bounds';
     }
 
     const cellIndex = cellY * cols + cellX;
     if (occupancyShadow[cellIndex]) {
-      return false;
+      console.log('[spawn] occupied', { cellX, cellY, cellIndex, activeCount });
+      return 'occupied';
     }
 
     const slot = activeCount;
@@ -111,13 +114,43 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
     ]));
     device.queue.writeBuffer(velocityBuffer, slot * 8, new Float32Array([0, 0]));
     device.queue.writeBuffer(remainderBuffer, slot * 8, new Float32Array([0, 0]));
-    device.queue.writeBuffer(colorBuffer, slot * 16, new Float32Array(randomColor()));
+    device.queue.writeBuffer(colorBuffer, slot * 16, new Float32Array(jitteredColor(color)));
     device.queue.writeBuffer(gridBuffer, cellIndex * 4, new Uint32Array([slot + 1]));
 
     occupancyShadow[cellIndex] = 1;
     activeCount++;
-    return true;
+    console.log('[spawn] ok', { cellX, cellY, cellIndex, slot, newActiveCount: activeCount, color });
+    return 'ok';
   }
 
-  return { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, getActiveCount, spawnParticle };
+  function spawnBrush(centerX, centerY, radius, color) {
+    let spawned = 0;
+    let lastRejection = null;
+    const r2 = radius * radius;
+
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx * dx + dy * dy > r2) {
+          continue;
+        }
+        const result = spawnParticle(centerX + dx, centerY + dy, color);
+        if (result === 'ok') {
+          spawned++;
+        } else {
+          lastRejection = result;
+        }
+      }
+    }
+
+    return { spawned, lastRejection };
+  }
+
+  function reset() {
+    activeCount = 0;
+    occupancy.fill(0);
+    occupancyShadow.fill(0);
+    device.queue.writeBuffer(gridBuffer, 0, occupancy);
+  }
+
+  return { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, getActiveCount, spawnParticle, spawnBrush, reset };
 }

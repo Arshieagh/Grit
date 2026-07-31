@@ -70,5 +70,9 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
     pass.end();
   }
 
-  return { dispatch };
+  function reset() {
+    device.queue.writeBuffer(velocityDeltaBuffer, 0, velocityDeltaData);
+  }
+
+  return { dispatch, reset };
 }

@@ -3,23 +3,41 @@ import { createParticleSystem } from './particles/particleSystem.js';
 import { createRenderPipeline } from './render/renderPipeline.js';
 import { createComputePipeline } from './compute/computePipeline.js';
 import { createSpawnInput } from './input/spawner.js';
-import { MAX_PARTICLES, INITIAL_PARTICLE_COUNT, PARTICLE_SIZE, GRAVITY, MAX_DT } from './sim/config.js';
+import { createDebugPanel } from './ui/debugPanel.js';
+import { createControls } from './ui/controls.js';
+import {
+  MAX_PARTICLES, INITIAL_PARTICLE_COUNT, PARTICLE_SIZE, GRAVITY, MAX_DT,
+  MATERIALS, MIN_BRUSH_RADIUS, MAX_BRUSH_RADIUS, DEFAULT_BRUSH_RADIUS, DEBUG_UPDATE_INTERVAL_MS,
+} from './sim/config.js';
 
 let lastTime = performance.now();
+let smoothedFps = 0;
+let lastDebugUpdate = 0;
+let previousSpawnResult = 'none';
 
 async function main() {
   const canvas = document.getElementById('canvas');
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
-  const { device, context, format } = await initWebGPU(canvas);
+  const { device, context, format, adapter } = await initWebGPU(canvas);
 
-  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, getActiveCount, spawnParticle } = createParticleSystem(device, {
+  const debugPanel = createDebugPanel();
+
+  device.addEventListener('uncapturederror', (event) => {
+    debugPanel.logToConsole(`GPU error: ${event.error.message}`);
+  });
+  device.lost.then((info) => {
+    debugPanel.logToConsole(`Device lost: ${info.message}`);
+  });
+
+  const particleSystem = createParticleSystem(device, {
     maxParticles: MAX_PARTICLES,
     initialCount: INITIAL_PARTICLE_COUNT,
     width: canvas.width,
     height: canvas.height,
     cellSize: PARTICLE_SIZE,
   });
+  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, getActiveCount, spawnBrush } = particleSystem;
 
   const renderPipeline = await createRenderPipeline(device, format, {
     positionBuffer,
@@ -41,20 +59,43 @@ async function main() {
     gravity: GRAVITY,
   });
 
-  createSpawnInput(canvas, { spawnParticle }, { cellSize: PARTICLE_SIZE });
+  const controls = createControls({
+    materials: MATERIALS,
+    defaultBrushRadius: DEFAULT_BRUSH_RADIUS,
+    minBrushRadius: MIN_BRUSH_RADIUS,
+    maxBrushRadius: MAX_BRUSH_RADIUS,
+    onReset: () => {
+      particleSystem.reset();
+      computePipeline.reset();
+    },
+    log: debugPanel.logToConsole,
+  });
+
+  const spawnInput = createSpawnInput(canvas, { spawnBrush }, {
+    cellSize: PARTICLE_SIZE,
+    getBrushRadius: controls.getBrushRadius,
+    getBrushColor: controls.getBrushColor,
+  });
+
+  const adapterInfo = adapter?.info
+    ? `${adapter.info.vendor || 'unknown'} ${adapter.info.description || ''}`.trim()
+    : 'unavailable';
 
   lastTime = performance.now();
-  requestAnimationFrame((now) => frame(now, context, device, computePipeline, renderPipeline, getActiveCount));
+  requestAnimationFrame((now) => frame(now, context, device, computePipeline, renderPipeline, getActiveCount, debugPanel, controls, spawnInput, cols, rows, adapterInfo));
 }
 
 main().catch(err => {
   console.error(err);
 });
 
-function frame(now, ctx, device, computePipeline, renderPipeline, getActiveCount) {
+function frame(now, ctx, device, computePipeline, renderPipeline, getActiveCount, debugPanel, controls, spawnInput, cols, rows, adapterInfo) {
   const rawDt = (now - lastTime) / 1000;
   lastTime = now;
   const dt = Math.min(rawDt, MAX_DT);
+
+  const instantFps = rawDt > 0 ? 1 / rawDt : 0;
+  smoothedFps = smoothedFps === 0 ? instantFps : smoothedFps * 0.9 + instantFps * 0.1;
 
   const view = ctx.getCurrentTexture().createView();
   const encoder = device.createCommandEncoder();
@@ -73,5 +114,27 @@ function frame(now, ctx, device, computePipeline, renderPipeline, getActiveCount
   pass.end();
 
   device.queue.submit([encoder.finish()]);
-  requestAnimationFrame((n) => frame(n, ctx, device, computePipeline, renderPipeline, getActiveCount));
+
+  const lastSpawnResult = spawnInput.getLastResult();
+  if (lastSpawnResult === 'capacity' && previousSpawnResult !== 'capacity') {
+    debugPanel.logToConsole('Spawn capacity reached');
+  }
+  previousSpawnResult = lastSpawnResult;
+
+  if (now - lastDebugUpdate > DEBUG_UPDATE_INTERVAL_MS) {
+    lastDebugUpdate = now;
+    debugPanel.updateStats({
+      fps: smoothedFps,
+      activeCount: getActiveCount(),
+      maxParticles: MAX_PARTICLES,
+      cols,
+      rows,
+      brushRadius: controls.getBrushRadius(),
+      materialName: controls.getSelectedMaterialName(),
+      adapterInfo,
+      lastSpawnResult,
+    });
+  }
+
+  requestAnimationFrame((n) => frame(n, ctx, device, computePipeline, renderPipeline, getActiveCount, debugPanel, controls, spawnInput, cols, rows, adapterInfo));
 }

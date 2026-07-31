@@ -8,8 +8,27 @@
     <script src="/src/main.js" type="module"></script>
   </head>
   <body>
-    <canvas id="canvas">
+    <canvas id="canvas"></canvas>
 
-    </canvas>
+    <div id="controls" class="panel">
+      <label for="brush-size">Brush size: <span id="brush-size-value">2</span></label>
+      <input type="range" id="brush-size" min="0" max="15" value="2">
+
+      <div id="materials"></div>
+
+      <button id="reset-btn">Reset</button>
+    </div>
+
+    <div id="debug-panel" class="panel">
+      <div>FPS: <span id="stat-fps">-</span></div>
+      <div>Particles: <span id="stat-count">-</span> / <span id="stat-max">-</span></div>
+      <div>Grid: <span id="stat-grid">-</span></div>
+      <div>Brush: <span id="stat-brush">-</span></div>
+      <div>Material: <span id="stat-material">-</span></div>
+      <div>GPU: <span id="stat-adapter">-</span></div>
+      <div>Last spawn: <span id="stat-last-spawn">-</span></div>
+    </div>
+
+    <div id="console-log" class="panel"></div>
   </body>
 </html>

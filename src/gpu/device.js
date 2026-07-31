@@ -22,5 +22,5 @@ export async function initWebGPU(canvas) {
     format: format,
   });
 
-  return { device, context, format };
+  return { device, context, format, adapter };
 }

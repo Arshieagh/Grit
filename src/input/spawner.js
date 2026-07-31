@@ -1,6 +1,7 @@
-export function createSpawnInput(canvas, particleSystem, { cellSize }) {
+export function createSpawnInput(canvas, { spawnBrush }, { cellSize, getBrushRadius, getBrushColor }) {
   let isDragging = false;
   let lastSpawnCell = null;
+  let lastResult = 'none';
 
   function screenToCell(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
@@ -19,7 +20,9 @@ export function createSpawnInput(canvas, particleSystem, { cellSize }) {
     if (lastSpawnCell && lastSpawnCell.x === cell.x && lastSpawnCell.y === cell.y) {
       return;
     }
-    particleSystem.spawnParticle(cell.x, cell.y);
+    const { spawned, lastRejection } = spawnBrush(cell.x, cell.y, getBrushRadius(), getBrushColor());
+    console.log('[trySpawn]', { cell, radius: getBrushRadius(), color: getBrushColor(), spawned, lastRejection });
+    lastResult = spawned > 0 ? 'ok' : (lastRejection || 'none');
     lastSpawnCell = cell;
   }
 
@@ -43,4 +46,10 @@ export function createSpawnInput(canvas, particleSystem, { cellSize }) {
 
   canvas.addEventListener('pointerup', stopDragging);
   canvas.addEventListener('pointercancel', stopDragging);
+
+  function getLastResult() {
+    return lastResult;
+  }
+
+  return { getLastResult };
 }
