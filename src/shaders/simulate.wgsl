@@ -11,6 +11,8 @@ struct SimUniforms {
 @group(0) @binding(5) var<storage, read_write> velocityDeltaY: array<atomic<i32>>;
 @group(0) @binding(6) var<storage, read> materials: array<u32>;
 @group(0) @binding(7) var<storage, read> materialFriction: array<f32>;
+@group(0) @binding(8) var<storage, read> materialImmovable: array<u32>;
+@group(0) @binding(9) var<storage, read> materialMatterState: array<u32>;
 
 const EMPTY: u32 = 0u;
 const MAX_STEPS: u32 = 8u;
@@ -18,10 +20,13 @@ const MAX_STEPS: u32 = 8u;
 // (WGSL has no atomic<f32>) - see queueVelocityDelta / pending-delta pickup
 const FIXED_SCALE: f32 = 65536.0;
 
-// Material IDs - must match the index order of MATERIALS in sim/config.js
-const MATERIAL_SAND: u32 = 0u;
-const MATERIAL_STONE: u32 = 1u;
-const MATERIAL_WATER: u32 = 2u;
+// Matter state IDs - must match MATTER_STATE_IDS in computePipeline.js.
+// Behavior branches on these instead of specific material IDs, so any
+// material marked immovable/liquid in config gets the matching
+// behavior automatically - not just the original hardcoded Stone/Water.
+const MATTER_SOLID: u32 = 0u;
+const MATTER_LIQUID: u32 = 1u;
+const MATTER_GAS: u32 = 2u;
 
 // Angle-of-repose heuristic tuning. When straight-down is blocked, a
 // diagonal slip is only taken if the local "height difference" between
@@ -131,7 +136,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   }
 
   let material = materials[i];
-  if (material == MATERIAL_STONE) {
+  if (materialImmovable[material] != 0u) {
     // Immovable: stays in whatever cell it spawned in forever, still
     // blocking other particles via the occupancy grid it already
     // claimed at spawn time. Nothing else in this function needs to run.
@@ -284,15 +289,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
       }
     }
 
-    // Water: if it can't fall straight down OR diagonally (whether
-    // because the diagonal cell was occupied, or because it was open
-    // but rejected by the slope gate above - moot for water anyway
-    // since its friction is 0, so useSlopeGate is always false), spread
-    // sideways along its current row before settling - a looser
-    // "liquid disperses" fallback sand and stone don't get. Reuses the
-    // same hash-ordered left/right candidates computed above (column
-    // bounds don't depend on which row we're checking).
-    if (!slipped && material == MATERIAL_WATER) {
+    // Liquids: if a material can't fall straight down OR diagonally
+    // (whether because the diagonal cell was occupied, or because it
+    // was open but rejected by the slope gate above - moot for any
+    // liquid with friction 0, since useSlopeGate is always false then),
+    // spread sideways along its current row before settling - a looser
+    // "liquid disperses" fallback solids don't get. Driven by
+    // matterState rather than a specific material ID, so every liquid
+    // (water, oil, lava, etc.) gets this, not just literally "water".
+    // Reuses the same hash-ordered left/right candidates computed above
+    // (column bounds don't depend on which row we're checking).
+    if (!slipped && materialMatterState[material] == MATTER_LIQUID) {
       if (firstValid) {
         let sideIdx = cellY * u32(cols) + u32(firstX);
         let sideClaim = tryClaim(sideIdx, i + 1u);

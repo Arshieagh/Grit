@@ -1,5 +1,8 @@
 import { createBuffer } from '../gpu/buffers.js';
 
+// Must match MATTER_SOLID/LIQUID/GAS in simulate.wgsl.
+const MATTER_STATE_IDS = { solid: 0, liquid: 1, gas: 2 };
+
 export async function createComputePipeline(device, { positionBuffer, velocityBuffer, remainderBuffer, materialBuffer, gridBuffer, maxParticles, cellSize, cols, rows, gravity, materials }) {
   const shaderCode = await fetch('/src/shaders/simulate.wgsl').then((res) => res.text());
   const shaderModule = device.createShaderModule({ code: shaderCode });
@@ -18,15 +21,30 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
     label: 'Velocity Delta Y',
   });
 
-  // Per-material-TYPE properties table (NOT per-particle - that's
-  // materialBuffer/binding 6). One f32 per MATERIALS[] entry, indexed by
-  // the same materialId used everywhere else. Built once from config and
-  // never written again - materials aren't edited live, only which
-  // material a new particle gets is chosen at spawn time.
+  // Per-material-TYPE properties tables (NOT per-particle - that's
+  // materialBuffer/binding 6). One entry per MATERIALS[] entry, indexed
+  // by the same materialId used everywhere else. Built once from config
+  // and never written again - materials aren't edited live, only which
+  // material a new particle gets is chosen at spawn time. Behavior that
+  // used to be hardcoded to specific material IDs (Stone is immovable,
+  // Water spreads sideways) is now driven by these tables instead, so
+  // ANY material marked immovable/liquid in config gets the matching
+  // behavior - essential once many materials exist, not just the
+  // original three.
   const materialFrictionBuffer = createBuffer(device, {
     data: Float32Array.from(materials, (m) => m.friction),
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     label: 'Material Friction Table',
+  });
+  const materialImmovableBuffer = createBuffer(device, {
+    data: Uint32Array.from(materials, (m) => (m.immovable ? 1 : 0)),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    label: 'Material Immovable Table',
+  });
+  const materialMatterStateBuffer = createBuffer(device, {
+    data: Uint32Array.from(materials, (m) => MATTER_STATE_IDS[m.matterState] ?? MATTER_STATE_IDS.solid),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    label: 'Material Matter State Table',
   });
 
   const bindGroupLayout = device.createBindGroupLayout({
@@ -39,6 +57,8 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
       { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
       { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
     ],
   });
 
@@ -53,6 +73,8 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
       { binding: 5, resource: { buffer: velocityDeltaBuffer } },
       { binding: 6, resource: { buffer: materialBuffer } },
       { binding: 7, resource: { buffer: materialFrictionBuffer } },
+      { binding: 8, resource: { buffer: materialImmovableBuffer } },
+      { binding: 9, resource: { buffer: materialMatterStateBuffer } },
     ],
   });
 
