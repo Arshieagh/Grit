@@ -1,6 +1,6 @@
 struct SimUniforms {
   data: vec4f,  // x: dt, y: gravity, z: cellSize, w: rows
-  data2: vec4f, // x: cols, y: frameCount, zw: unused
+  data2: vec4f, // x: cols, y: frameCount, z: activeCount, w: unused
 }
 
 @group(0) @binding(0) var<uniform> uniforms: SimUniforms;
@@ -64,7 +64,8 @@ fn queueVelocityDelta(idx: u32, delta: f32) {
 @compute @workgroup_size(64)
 fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
-  if (i >= arrayLength(&positions)) {
+  let activeCount = u32(uniforms.data2.z);
+  if (i >= activeCount || i >= arrayLength(&positions)) {
     return;
   }
 

@@ -2,7 +2,8 @@ import { initWebGPU } from './gpu/device.js';
 import { createParticleSystem } from './particles/particleSystem.js';
 import { createRenderPipeline } from './render/renderPipeline.js';
 import { createComputePipeline } from './compute/computePipeline.js';
-import { PARTICLE_COUNT, PARTICLE_SIZE, GRAVITY, MAX_DT } from './sim/config.js';
+import { createSpawnInput } from './input/spawner.js';
+import { MAX_PARTICLES, INITIAL_PARTICLE_COUNT, PARTICLE_SIZE, GRAVITY, MAX_DT } from './sim/config.js';
 
 let lastTime = performance.now();
 
@@ -12,8 +13,9 @@ async function main() {
   canvas.height = window.innerHeight;
   const { device, context, format } = await initWebGPU(canvas);
 
-  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, count, cols, rows } = createParticleSystem(device, {
-    count: PARTICLE_COUNT,
+  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, getActiveCount, spawnParticle } = createParticleSystem(device, {
+    maxParticles: MAX_PARTICLES,
+    initialCount: INITIAL_PARTICLE_COUNT,
     width: canvas.width,
     height: canvas.height,
     cellSize: PARTICLE_SIZE,
@@ -22,7 +24,6 @@ async function main() {
   const renderPipeline = await createRenderPipeline(device, format, {
     positionBuffer,
     colorBuffer,
-    particleCount: count,
     particleSize: PARTICLE_SIZE,
     width: canvas.width,
     height: canvas.height,
@@ -33,22 +34,24 @@ async function main() {
     velocityBuffer,
     remainderBuffer,
     gridBuffer,
-    particleCount: count,
+    maxParticles: MAX_PARTICLES,
     cellSize: PARTICLE_SIZE,
     cols,
     rows,
     gravity: GRAVITY,
   });
 
+  createSpawnInput(canvas, { spawnParticle }, { cellSize: PARTICLE_SIZE });
+
   lastTime = performance.now();
-  requestAnimationFrame((now) => frame(now, context, device, computePipeline, renderPipeline));
+  requestAnimationFrame((now) => frame(now, context, device, computePipeline, renderPipeline, getActiveCount));
 }
 
 main().catch(err => {
   console.error(err);
 });
 
-function frame(now, ctx, device, computePipeline, renderPipeline) {
+function frame(now, ctx, device, computePipeline, renderPipeline, getActiveCount) {
   const rawDt = (now - lastTime) / 1000;
   lastTime = now;
   const dt = Math.min(rawDt, MAX_DT);
@@ -56,7 +59,7 @@ function frame(now, ctx, device, computePipeline, renderPipeline) {
   const view = ctx.getCurrentTexture().createView();
   const encoder = device.createCommandEncoder();
 
-  computePipeline.dispatch(encoder, dt);
+  computePipeline.dispatch(encoder, dt, getActiveCount());
 
   const pass = encoder.beginRenderPass({
     colorAttachments: [{
@@ -66,9 +69,9 @@ function frame(now, ctx, device, computePipeline, renderPipeline) {
       storeOp: 'store',
     }],
   });
-  renderPipeline.draw(pass);
+  renderPipeline.draw(pass, getActiveCount());
   pass.end();
 
   device.queue.submit([encoder.finish()]);
-  requestAnimationFrame((n) => frame(n, ctx, device, computePipeline, renderPipeline));
+  requestAnimationFrame((n) => frame(n, ctx, device, computePipeline, renderPipeline, getActiveCount));
 }

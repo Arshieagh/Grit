@@ -1,6 +1,6 @@
 import { createBuffer } from '../gpu/buffers.js';
 
-export async function createRenderPipeline(device, format, { positionBuffer, colorBuffer, particleCount, particleSize, width, height }) {
+export async function createRenderPipeline(device, format, { positionBuffer, colorBuffer, particleSize, width, height }) {
   const shaderCode = await fetch('/src/shaders/render.wgsl').then((res) => res.text());
   const shaderModule = device.createShaderModule({ code: shaderCode });
 
@@ -44,10 +44,13 @@ export async function createRenderPipeline(device, format, { positionBuffer, col
     },
   });
 
-  function draw(pass) {
+  function draw(pass, activeCount) {
+    if (activeCount === 0) {
+      return;
+    }
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
-    pass.draw(4, particleCount);
+    pass.draw(4, activeCount);
   }
 
   function updateResolution(newWidth, newHeight) {

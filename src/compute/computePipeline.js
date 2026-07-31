@@ -1,6 +1,6 @@
 import { createBuffer } from '../gpu/buffers.js';
 
-export async function createComputePipeline(device, { positionBuffer, velocityBuffer, remainderBuffer, gridBuffer, particleCount, cellSize, cols, rows, gravity }) {
+export async function createComputePipeline(device, { positionBuffer, velocityBuffer, remainderBuffer, gridBuffer, maxParticles, cellSize, cols, rows, gravity }) {
   const shaderCode = await fetch('/src/shaders/simulate.wgsl').then((res) => res.text());
   const shaderModule = device.createShaderModule({ code: shaderCode });
 
@@ -11,7 +11,7 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
     label: 'sim-uniforms',
   });
 
-  const velocityDeltaData = new Int32Array(particleCount);
+  const velocityDeltaData = new Int32Array(maxParticles);
   const velocityDeltaBuffer = createBuffer(device, {
     data: velocityDeltaData,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -49,15 +49,19 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
     },
   });
 
-  const workgroupCount = Math.ceil(particleCount / 64);
-
   let frameCount = 0;
 
-  function dispatch(encoder, dt) {
+  function dispatch(encoder, dt, activeCount) {
     uniformData[0] = dt;
     uniformData[5] = frameCount;
+    uniformData[6] = activeCount;
     device.queue.writeBuffer(uniformBuffer, 0, uniformData);
     frameCount = (frameCount + 1) % 1000000;
+
+    const workgroupCount = Math.ceil(activeCount / 64);
+    if (workgroupCount === 0) {
+      return;
+    }
 
     const pass = encoder.beginComputePass();
     pass.setPipeline(pipeline);
