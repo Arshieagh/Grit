@@ -163,9 +163,13 @@ function frame(now, ctx, device, computePipeline, renderPipeline, particleSystem
   if (now - lastDebugUpdate > DEBUG_UPDATE_INTERVAL_MS) {
     lastDebugUpdate = now;
     const materialCounts = particleSystem.getMaterialCounts();
-    const materialBreakdown = MATERIALS
-      .map((material, id) => `${material.name} ${materialCounts[id] || 0}`)
-      .join(', ');
+    // Only list materials actually in use - with 100+ materials defined,
+    // listing every single one (mostly at 0) every update would be an
+    // unreadable wall of text.
+    const materialBreakdown = Object.entries(materialCounts)
+      .filter(([, count]) => count > 0)
+      .map(([id, count]) => `${MATERIALS[id].name} ${count}`)
+      .join(', ') || 'none yet';
     debugPanel.updateStats({
       fps: smoothedFps,
       activeCount,
