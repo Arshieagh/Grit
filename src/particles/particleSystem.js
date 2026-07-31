@@ -80,11 +80,45 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
   });
   const gridBuffer = createBuffer(device, {
     data: occupancy,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     label: 'Occupancy Grid',
+  });
+  const readbackBuffer = device.createBuffer({
+    size: occupancy.byteLength,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    label: 'Occupancy Readback',
   });
 
   let activeCount = initialCount;
+  let isSyncing = false;
+
+  // The CPU-side occupancyShadow is only ever written optimistically at
+  // spawn time - it never learns when the GPU compute shader later moves
+  // a particle away from a cell (e.g. gravity pulling it down). Left
+  // alone, every spawn location would become permanently blocked once
+  // sand falls through it. This periodically copies the real GPU grid
+  // back to the CPU (via a MAP_READ buffer) and refreshes the shadow
+  // from it, bounding the staleness to "since the last sync" instead of
+  // "forever."
+  async function syncOccupancyShadow() {
+    if (isSyncing) {
+      return;
+    }
+    isSyncing = true;
+
+    const encoder = device.createCommandEncoder();
+    encoder.copyBufferToBuffer(gridBuffer, 0, readbackBuffer, 0, occupancy.byteLength);
+    device.queue.submit([encoder.finish()]);
+
+    await readbackBuffer.mapAsync(GPUMapMode.READ);
+    const gpuData = new Uint32Array(readbackBuffer.getMappedRange());
+    for (let i = 0; i < gpuData.length; i++) {
+      occupancyShadow[i] = gpuData[i] !== 0 ? 1 : 0;
+    }
+    readbackBuffer.unmap();
+
+    isSyncing = false;
+  }
 
   function getActiveCount() {
     return activeCount;
@@ -92,17 +126,14 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
 
   function spawnParticle(cellX, cellY, color) {
     if (activeCount >= maxParticles) {
-      console.log('[spawn] capacity', { cellX, cellY, activeCount, maxParticles });
       return 'capacity';
     }
     if (cellX < 0 || cellX >= cols || cellY < 0 || cellY >= rows) {
-      console.log('[spawn] bounds', { cellX, cellY, cols, rows });
       return 'bounds';
     }
 
     const cellIndex = cellY * cols + cellX;
     if (occupancyShadow[cellIndex]) {
-      console.log('[spawn] occupied', { cellX, cellY, cellIndex, activeCount });
       return 'occupied';
     }
 
@@ -119,7 +150,6 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
 
     occupancyShadow[cellIndex] = 1;
     activeCount++;
-    console.log('[spawn] ok', { cellX, cellY, cellIndex, slot, newActiveCount: activeCount, color });
     return 'ok';
   }
 
@@ -152,5 +182,5 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
     device.queue.writeBuffer(gridBuffer, 0, occupancy);
   }
 
-  return { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, getActiveCount, spawnParticle, spawnBrush, reset };
+  return { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, getActiveCount, spawnParticle, spawnBrush, reset, syncOccupancyShadow };
 }

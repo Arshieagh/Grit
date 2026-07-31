@@ -17,3 +17,5 @@ export const DEFAULT_BRUSH_RADIUS = 2;
 
 export const DEBUG_UPDATE_INTERVAL_MS = 250;
 export const CONSOLE_MAX_LINES = 50;
+
+export const OCCUPANCY_SYNC_INTERVAL_MS = 500;

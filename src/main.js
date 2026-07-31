@@ -8,12 +8,14 @@ import { createControls } from './ui/controls.js';
 import {
   MAX_PARTICLES, INITIAL_PARTICLE_COUNT, PARTICLE_SIZE, GRAVITY, MAX_DT,
   MATERIALS, MIN_BRUSH_RADIUS, MAX_BRUSH_RADIUS, DEFAULT_BRUSH_RADIUS, DEBUG_UPDATE_INTERVAL_MS,
+  OCCUPANCY_SYNC_INTERVAL_MS,
 } from './sim/config.js';
 
 let lastTime = performance.now();
 let smoothedFps = 0;
 let lastDebugUpdate = 0;
 let previousSpawnResult = 'none';
+let lastOccupancySync = 0;
 
 async function main() {
   const canvas = document.getElementById('canvas');
@@ -37,7 +39,7 @@ async function main() {
     height: canvas.height,
     cellSize: PARTICLE_SIZE,
   });
-  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, getActiveCount, spawnBrush } = particleSystem;
+  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, cols, rows, spawnBrush } = particleSystem;
 
   const renderPipeline = await createRenderPipeline(device, format, {
     positionBuffer,
@@ -82,14 +84,14 @@ async function main() {
     : 'unavailable';
 
   lastTime = performance.now();
-  requestAnimationFrame((now) => frame(now, context, device, computePipeline, renderPipeline, getActiveCount, debugPanel, controls, spawnInput, cols, rows, adapterInfo));
+  requestAnimationFrame((now) => frame(now, context, device, computePipeline, renderPipeline, particleSystem, debugPanel, controls, spawnInput, cols, rows, adapterInfo));
 }
 
 main().catch(err => {
   console.error(err);
 });
 
-function frame(now, ctx, device, computePipeline, renderPipeline, getActiveCount, debugPanel, controls, spawnInput, cols, rows, adapterInfo) {
+function frame(now, ctx, device, computePipeline, renderPipeline, particleSystem, debugPanel, controls, spawnInput, cols, rows, adapterInfo) {
   const rawDt = (now - lastTime) / 1000;
   lastTime = now;
   const dt = Math.min(rawDt, MAX_DT);
@@ -97,10 +99,12 @@ function frame(now, ctx, device, computePipeline, renderPipeline, getActiveCount
   const instantFps = rawDt > 0 ? 1 / rawDt : 0;
   smoothedFps = smoothedFps === 0 ? instantFps : smoothedFps * 0.9 + instantFps * 0.1;
 
+  const activeCount = particleSystem.getActiveCount();
+
   const view = ctx.getCurrentTexture().createView();
   const encoder = device.createCommandEncoder();
 
-  computePipeline.dispatch(encoder, dt, getActiveCount());
+  computePipeline.dispatch(encoder, dt, activeCount);
 
   const pass = encoder.beginRenderPass({
     colorAttachments: [{
@@ -110,10 +114,15 @@ function frame(now, ctx, device, computePipeline, renderPipeline, getActiveCount
       storeOp: 'store',
     }],
   });
-  renderPipeline.draw(pass, getActiveCount());
+  renderPipeline.draw(pass, activeCount);
   pass.end();
 
   device.queue.submit([encoder.finish()]);
+
+  if (now - lastOccupancySync > OCCUPANCY_SYNC_INTERVAL_MS) {
+    lastOccupancySync = now;
+    particleSystem.syncOccupancyShadow();
+  }
 
   const lastSpawnResult = spawnInput.getLastResult();
   if (lastSpawnResult === 'capacity' && previousSpawnResult !== 'capacity') {
@@ -125,7 +134,7 @@ function frame(now, ctx, device, computePipeline, renderPipeline, getActiveCount
     lastDebugUpdate = now;
     debugPanel.updateStats({
       fps: smoothedFps,
-      activeCount: getActiveCount(),
+      activeCount,
       maxParticles: MAX_PARTICLES,
       cols,
       rows,
@@ -136,5 +145,5 @@ function frame(now, ctx, device, computePipeline, renderPipeline, getActiveCount
     });
   }
 
-  requestAnimationFrame((n) => frame(n, ctx, device, computePipeline, renderPipeline, getActiveCount, debugPanel, controls, spawnInput, cols, rows, adapterInfo));
+  requestAnimationFrame((n) => frame(n, ctx, device, computePipeline, renderPipeline, particleSystem, debugPanel, controls, spawnInput, cols, rows, adapterInfo));
 }

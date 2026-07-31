@@ -21,7 +21,6 @@ export function createSpawnInput(canvas, { spawnBrush }, { cellSize, getBrushRad
       return;
     }
     const { spawned, lastRejection } = spawnBrush(cell.x, cell.y, getBrushRadius(), getBrushColor());
-    console.log('[trySpawn]', { cell, radius: getBrushRadius(), color: getBrushColor(), spawned, lastRejection });
     lastResult = spawned > 0 ? 'ok' : (lastRejection || 'none');
     lastSpawnCell = cell;
   }
