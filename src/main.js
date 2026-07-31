@@ -81,6 +81,21 @@ async function main() {
     getBrushMaterialId: controls.getBrushMaterialId,
   });
 
+  // Keeps the canvas's internal pixel buffer matching its CSS size on
+  // resize, so cells stay square instead of the browser stretching a
+  // fixed-resolution buffer non-uniformly. Deliberately does NOT resize
+  // the simulation grid itself (cols/rows/occupancy buffer stay fixed at
+  // their original dimensions) - growing/shrinking the grid would mean
+  // recreating buffers and remapping existing particles' cell indices,
+  // a bigger design decision left for later. Net effect: the sim's
+  // playable area stays anchored at its original size and position;
+  // resizing the window larger just reveals blank canvas beyond it.
+  window.addEventListener('resize', () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    renderPipeline.updateResolution(canvas.width, canvas.height);
+  });
+
   const adapterInfo = adapter?.info
     ? `${adapter.info.vendor || 'unknown'} ${adapter.info.description || ''}`.trim()
     : 'unavailable';
