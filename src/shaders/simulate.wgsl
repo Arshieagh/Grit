@@ -10,11 +10,14 @@ struct SimUniforms {
 @group(0) @binding(4) var<storage, read_write> grid: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read_write> velocityDeltaY: array<atomic<i32>>;
 @group(0) @binding(6) var<storage, read> materials: array<u32>;
-@group(0) @binding(7) var<storage, read> materialFriction: array<f32>;
-@group(0) @binding(8) var<storage, read> materialImmovable: array<u32>;
-@group(0) @binding(9) var<storage, read> materialMatterState: array<u32>;
-@group(0) @binding(10) var<storage, read> materialSpreadChance: array<f32>;
-@group(0) @binding(11) var<storage, read> materialDensity: array<f32>;
+// Packed material-property tables - see computePipeline.js for why these
+// 5 logical fields (friction, immovable, matterState, spreadChance,
+// density) share just 2 bindings instead of one each: WebGPU only
+// guarantees 8 storage buffers per shader stage by default, and this
+// shader already needed 6 for the particle data + per-particle material
+// id, leaving room for exactly 2 more.
+@group(0) @binding(7) var<storage, read> materialProps: array<vec4f>; // x=friction, y=spreadChance, z=density, w=unused
+@group(0) @binding(8) var<storage, read> materialFlags: array<u32>; // bit 0 = immovable, bits 1-2 = matterState
 
 const EMPTY: u32 = 0u;
 const MAX_STEPS: u32 = 8u;
@@ -41,6 +44,17 @@ const SLOPE_PROBE_DEPTH: u32 = 4u;
 struct ClaimResult {
   claimed: bool,
   blocker: u32, // valid only when claimed == false: the occupant's particle index
+}
+
+// Unpacks the two flag fields squeezed into one u32 per material - see
+// materialFlags binding above for why these are bit-packed instead of
+// two separate bindings.
+fn materialIsImmovable(material: u32) -> bool {
+  return (materialFlags[material] & 1u) != 0u;
+}
+
+fn materialGetMatterState(material: u32) -> u32 {
+  return (materialFlags[material] >> 1u) & 3u;
 }
 
 // Atomically claims cell `idx` for particle `owner` (index + 1) if it's
@@ -138,7 +152,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   }
 
   let material = materials[i];
-  if (materialImmovable[material] != 0u) {
+  if (materialIsImmovable(material)) {
     // Immovable: stays in whatever cell it spawned in forever, still
     // blocking other particles via the occupancy grid it already
     // claimed at spawn time. Nothing else in this function needs to run.
@@ -151,8 +165,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   let rows = uniforms.data.w;
   let cols = uniforms.data2.x;
   let frameCount = u32(uniforms.data2.y);
-  let friction = materialFriction[material];
-  let matterState = materialMatterState[material];
+  let friction = materialProps[material].x;
+  let matterState = materialGetMatterState(material);
 
   var pos = positions[i];
   var vel = velocities[i];
@@ -316,14 +330,14 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     // same hash-ordered left/right candidates computed above (column
     // bounds don't depend on which row we're checking).
     //
-    // Gated by materialSpreadChance (derived from viscosity in
-    // computePipeline.js): thick liquids like honey/tar/lava resist
+    // Gated by materialProps.y, the spread chance (derived from viscosity
+    // in computePipeline.js): thick liquids like honey/tar/lava resist
     // spreading, thin ones like water and low-viscosity gases spread
     // almost every attempt. Uses a DIFFERENT hash seed from the
     // left/right ordering above, so "should I spread at all" and "which
     // side first" don't correlate.
     if (!slipped && (matterState == MATTER_LIQUID || matterState == MATTER_GAS)) {
-      let spreadChance = materialSpreadChance[material];
+      let spreadChance = materialProps[material].y;
       let spreadRoll = f32(hash_u32(i ^ (frameCount * 0x2545F491u))) / 4294967295.0;
       if (spreadRoll <= spreadChance) {
         if (firstValid) {
@@ -368,8 +382,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     let blockerIdx = straightClaim.blocker;
     let vBottom = velocities[blockerIdx].y; // benign read race - see plan notes
     let blockerMaterial = materials[blockerIdx]; // same benign-read category
-    let myDensity = materialDensity[material];
-    let theirDensity = materialDensity[blockerMaterial];
+    let myDensity = materialProps[material].z;
+    let theirDensity = materialProps[blockerMaterial].z;
     let totalDensity = myDensity + theirDensity;
     let vFinal = (myDensity * vel.y + theirDensity * vBottom) / totalDensity;
     vel.y = vFinal; // our own half applies immediately (own slot, no race)

@@ -47,30 +47,26 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
   // ANY material marked immovable/liquid in config gets the matching
   // behavior - essential once many materials exist, not just the
   // original three.
-  const materialFrictionBuffer = createBuffer(device, {
-    data: Float32Array.from(materials, (m) => m.friction),
+  //
+  // Packed into just 2 buffers (not 5, one per field) because WebGPU
+  // only guarantees 8 storage buffer bindings per shader stage by
+  // default - this compute shader already needs 5 for the particle
+  // buffers themselves (positions/velocities/remainders/grid/velocity
+  // delta) plus 1 for the per-particle material id, leaving room for
+  // exactly 2 more. A real device with only the guaranteed default
+  // limit will fail to even create the pipeline if this goes over 8
+  // (confirmed against a real WebGPU implementation, not just this
+  // project's own reflection-based checks - see git history for the
+  // "11 storage buffers exceeds limit 10" failure this replaces).
+  const materialPropsBuffer = createBuffer(device, {
+    data: Float32Array.from(materials.flatMap((m) => [m.friction, viscosityToSpreadChance(m.viscosity), m.density, 0])),
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    label: 'Material Friction Table',
+    label: 'Material Props Table (friction, spreadChance, density, unused)',
   });
-  const materialImmovableBuffer = createBuffer(device, {
-    data: Uint32Array.from(materials, (m) => (m.immovable ? 1 : 0)),
+  const materialFlagsBuffer = createBuffer(device, {
+    data: Uint32Array.from(materials, (m) => (m.immovable ? 1 : 0) | ((MATTER_STATE_IDS[m.matterState] ?? MATTER_STATE_IDS.solid) << 1)),
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    label: 'Material Immovable Table',
-  });
-  const materialMatterStateBuffer = createBuffer(device, {
-    data: Uint32Array.from(materials, (m) => MATTER_STATE_IDS[m.matterState] ?? MATTER_STATE_IDS.solid),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    label: 'Material Matter State Table',
-  });
-  const materialSpreadChanceBuffer = createBuffer(device, {
-    data: Float32Array.from(materials, (m) => viscosityToSpreadChance(m.viscosity)),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    label: 'Material Spread Chance Table',
-  });
-  const materialDensityBuffer = createBuffer(device, {
-    data: Float32Array.from(materials, (m) => m.density),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    label: 'Material Density Table',
+    label: 'Material Flags Table (immovable bit 0, matterState bits 1-2)',
   });
 
   const bindGroupLayout = device.createBindGroupLayout({
@@ -84,9 +80,6 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
       { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
       { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
       { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-      { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-      { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-      { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
     ],
   });
 
@@ -100,11 +93,8 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
       { binding: 4, resource: { buffer: gridBuffer } },
       { binding: 5, resource: { buffer: velocityDeltaBuffer } },
       { binding: 6, resource: { buffer: materialBuffer } },
-      { binding: 7, resource: { buffer: materialFrictionBuffer } },
-      { binding: 8, resource: { buffer: materialImmovableBuffer } },
-      { binding: 9, resource: { buffer: materialMatterStateBuffer } },
-      { binding: 10, resource: { buffer: materialSpreadChanceBuffer } },
-      { binding: 11, resource: { buffer: materialDensityBuffer } },
+      { binding: 7, resource: { buffer: materialPropsBuffer } },
+      { binding: 8, resource: { buffer: materialFlagsBuffer } },
     ],
   });
 
