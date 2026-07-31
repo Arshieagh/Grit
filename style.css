@@ -10,6 +10,24 @@ canvas {
   height: 100%;
 }
 
+#fatal-error {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: #1a0000;
+  color: #ffb3b3;
+  font-family: system-ui, sans-serif;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  z-index: 100;
+}
+
+#fatal-error.visible {
+  display: flex;
+}
+
 .panel {
   position: fixed;
   background: rgba(20, 20, 24, 0.85);

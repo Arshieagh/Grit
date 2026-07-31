@@ -97,6 +97,7 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
 
   let activeCount = initialCount;
   let isSyncing = false;
+  let materialCounts = {};
 
   // The CPU-side occupancyShadow is only ever written optimistically at
   // spawn time - it never learns when the GPU compute shader later moves
@@ -157,6 +158,7 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
 
     occupancyShadow[cellIndex] = 1;
     activeCount++;
+    materialCounts[materialId] = (materialCounts[materialId] || 0) + 1;
     return 'ok';
   }
 
@@ -186,8 +188,13 @@ export function createParticleSystem(device, {maxParticles, initialCount, width,
     activeCount = 0;
     occupancy.fill(0);
     occupancyShadow.fill(0);
+    materialCounts = {};
     device.queue.writeBuffer(gridBuffer, 0, occupancy);
   }
 
-  return { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, materialBuffer, gridBuffer, cols, rows, getActiveCount, spawnParticle, spawnBrush, reset, syncOccupancyShadow };
+  function getMaterialCounts() {
+    return materialCounts;
+  }
+
+  return { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, materialBuffer, gridBuffer, cols, rows, getActiveCount, getMaterialCounts, spawnParticle, spawnBrush, reset, syncOccupancyShadow };
 }

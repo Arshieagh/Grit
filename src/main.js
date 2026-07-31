@@ -90,10 +90,17 @@ async function main() {
   // a bigger design decision left for later. Net effect: the sim's
   // playable area stays anchored at its original size and position;
   // resizing the window larger just reveals blank canvas beyond it.
+  let resizeTimeout = null;
   window.addEventListener('resize', () => {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    renderPipeline.updateResolution(canvas.width, canvas.height);
+    // Debounced - a dragged window edge can fire many resize events per
+    // second, and there's no need to touch the GPU resolution uniform
+    // on every single one.
+    clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(() => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      renderPipeline.updateResolution(canvas.width, canvas.height);
+    }, 150);
   });
 
   const adapterInfo = adapter?.info
@@ -106,6 +113,9 @@ async function main() {
 
 main().catch(err => {
   console.error(err);
+  const errorEl = document.getElementById('fatal-error');
+  errorEl.textContent = `Something went wrong starting Grit: ${err.message}`;
+  errorEl.classList.add('visible');
 });
 
 function frame(now, ctx, device, computePipeline, renderPipeline, particleSystem, debugPanel, controls, spawnInput, cols, rows, adapterInfo) {
@@ -138,7 +148,9 @@ function frame(now, ctx, device, computePipeline, renderPipeline, particleSystem
 
   if (now - lastOccupancySync > OCCUPANCY_SYNC_INTERVAL_MS) {
     lastOccupancySync = now;
-    particleSystem.syncOccupancyShadow();
+    particleSystem.syncOccupancyShadow().catch((err) => {
+      debugPanel.logToConsole(`Occupancy sync failed: ${err.message}`);
+    });
   }
 
   const lastSpawnResult = spawnInput.getLastResult();
@@ -149,6 +161,10 @@ function frame(now, ctx, device, computePipeline, renderPipeline, particleSystem
 
   if (now - lastDebugUpdate > DEBUG_UPDATE_INTERVAL_MS) {
     lastDebugUpdate = now;
+    const materialCounts = particleSystem.getMaterialCounts();
+    const materialBreakdown = MATERIALS
+      .map((material, id) => `${material.name} ${materialCounts[id] || 0}`)
+      .join(', ');
     debugPanel.updateStats({
       fps: smoothedFps,
       activeCount,
@@ -159,6 +175,7 @@ function frame(now, ctx, device, computePipeline, renderPipeline, particleSystem
       materialName: controls.getSelectedMaterialName(),
       adapterInfo,
       lastSpawnResult,
+      materialBreakdown,
     });
   }
 

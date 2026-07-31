@@ -9,9 +9,10 @@ export function createDebugPanel() {
   const materialEl = document.getElementById('stat-material');
   const adapterEl = document.getElementById('stat-adapter');
   const lastSpawnEl = document.getElementById('stat-last-spawn');
+  const breakdownEl = document.getElementById('stat-material-breakdown');
   const consoleEl = document.getElementById('console-log');
 
-  function updateStats({ fps, activeCount, maxParticles, cols, rows, brushRadius, materialName, adapterInfo, lastSpawnResult }) {
+  function updateStats({ fps, activeCount, maxParticles, cols, rows, brushRadius, materialName, adapterInfo, lastSpawnResult, materialBreakdown }) {
     fpsEl.textContent = fps.toFixed(0);
     countEl.textContent = activeCount;
     maxEl.textContent = maxParticles;
@@ -20,6 +21,7 @@ export function createDebugPanel() {
     materialEl.textContent = materialName;
     adapterEl.textContent = adapterInfo;
     lastSpawnEl.textContent = lastSpawnResult;
+    breakdownEl.textContent = materialBreakdown;
   }
 
   function logToConsole(message) {

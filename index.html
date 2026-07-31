@@ -10,6 +10,8 @@
   <body>
     <canvas id="canvas"></canvas>
 
+    <div id="fatal-error"></div>
+
     <div id="controls" class="panel">
       <label for="brush-size">Brush size: <span id="brush-size-value">2</span></label>
       <input type="range" id="brush-size" min="0" max="15" value="2">
@@ -27,6 +29,7 @@
       <div>Material: <span id="stat-material">-</span></div>
       <div>GPU: <span id="stat-adapter">-</span></div>
       <div>Last spawn: <span id="stat-last-spawn">-</span></div>
+      <div>By material: <span id="stat-material-breakdown">-</span></div>
     </div>
 
     <div id="console-log" class="panel"></div>

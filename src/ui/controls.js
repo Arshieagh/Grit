@@ -11,11 +11,19 @@ export function createControls({ materials, defaultBrushRadius, minBrushRadius, 
 
   let brushRadius = defaultBrushRadius;
   let selectedMaterial = materials[0];
+  const materialButtons = [];
 
   sliderEl.addEventListener('input', () => {
     brushRadius = Number(sliderEl.value);
     sliderValueEl.textContent = brushRadius;
   });
+
+  function selectMaterial(material) {
+    selectedMaterial = material;
+    materialsEl.querySelectorAll('.material-btn').forEach((b) => b.classList.remove('active'));
+    materialButtons[materials.indexOf(material)].classList.add('active');
+    log(`Material: ${material.name}`);
+  }
 
   materials.forEach((material) => {
     const btn = document.createElement('button');
@@ -26,19 +34,39 @@ export function createControls({ materials, defaultBrushRadius, minBrushRadius, 
       btn.classList.add('active');
     }
 
-    btn.addEventListener('click', () => {
-      selectedMaterial = material;
-      materialsEl.querySelectorAll('.material-btn').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      log(`Material: ${material.name}`);
-    });
+    btn.addEventListener('click', () => selectMaterial(material));
 
     materialsEl.appendChild(btn);
+    materialButtons.push(btn);
   });
 
-  resetBtn.addEventListener('click', () => {
+  function doReset() {
     onReset();
     log('Reset canvas');
+  }
+
+  resetBtn.addEventListener('click', doReset);
+
+  // Keyboard shortcuts: number keys pick a material by position, R resets.
+  // Ignored while focus is in a form control so arrow-key slider nudging
+  // and any future text inputs aren't hijacked.
+  window.addEventListener('keydown', (event) => {
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') {
+      return;
+    }
+
+    if (event.key >= '1' && event.key <= '9') {
+      const index = Number(event.key) - 1;
+      if (index < materials.length) {
+        selectMaterial(materials[index]);
+      }
+      return;
+    }
+
+    if (event.key === 'r' || event.key === 'R') {
+      doReset();
+    }
   });
 
   function getBrushRadius() {
