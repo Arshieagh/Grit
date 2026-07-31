@@ -22,6 +22,9 @@ export function createParticleSystem(device, {count, width, height, cellSize}) {
     colors[i * 4 + 3] = 1.0;
   }
 
+  const velocities = new Float32Array(count * 2);
+  const remainders = new Float32Array(count * 2);
+
   const positionBuffer = createBuffer(device, {
     data: positions,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -32,5 +35,16 @@ export function createParticleSystem(device, {count, width, height, cellSize}) {
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     label: 'Particle Colors',
   });
-  return { positionBuffer, colorBuffer, count };
+  const velocityBuffer = createBuffer(device, {
+    data: velocities,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    label: 'Particle Velocities',
+  });
+  const remainderBuffer = createBuffer(device, {
+    data: remainders,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    label: 'Particle Remainders',
+  });
+
+  return { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, count, rows };
 }

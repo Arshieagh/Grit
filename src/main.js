@@ -1,7 +1,10 @@
 import { initWebGPU } from './gpu/device.js';
 import { createParticleSystem } from './particles/particleSystem.js';
 import { createRenderPipeline } from './render/renderPipeline.js';
-import { PARTICLE_COUNT, PARTICLE_SIZE } from './sim/config.js';
+import { createComputePipeline } from './compute/computePipeline.js';
+import { PARTICLE_COUNT, PARTICLE_SIZE, GRAVITY, MAX_DT } from './sim/config.js';
+
+let lastTime = performance.now();
 
 async function main() {
   const canvas = document.getElementById('canvas');
@@ -9,7 +12,7 @@ async function main() {
   canvas.height = window.innerHeight;
   const { device, context, format } = await initWebGPU(canvas);
 
-  const { positionBuffer, colorBuffer, count } = createParticleSystem(device, {
+  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, count, rows } = createParticleSystem(device, {
     count: PARTICLE_COUNT,
     width: canvas.width,
     height: canvas.height,
@@ -25,16 +28,33 @@ async function main() {
     height: canvas.height,
   });
 
-  requestAnimationFrame(() => frame(context, device, renderPipeline));
+  const computePipeline = await createComputePipeline(device, {
+    positionBuffer,
+    velocityBuffer,
+    remainderBuffer,
+    particleCount: count,
+    cellSize: PARTICLE_SIZE,
+    rows,
+    gravity: GRAVITY,
+  });
+
+  lastTime = performance.now();
+  requestAnimationFrame((now) => frame(now, context, device, computePipeline, renderPipeline));
 }
 
 main().catch(err => {
   console.error(err);
 });
 
-function frame(ctx, device, renderPipeline) {
+function frame(now, ctx, device, computePipeline, renderPipeline) {
+  const rawDt = (now - lastTime) / 1000;
+  lastTime = now;
+  const dt = Math.min(rawDt, MAX_DT);
+
   const view = ctx.getCurrentTexture().createView();
   const encoder = device.createCommandEncoder();
+
+  computePipeline.dispatch(encoder, dt);
 
   const pass = encoder.beginRenderPass({
     colorAttachments: [{
@@ -48,5 +68,5 @@ function frame(ctx, device, renderPipeline) {
   pass.end();
 
   device.queue.submit([encoder.finish()]);
-  requestAnimationFrame(() => frame(ctx, device, renderPipeline));
+  requestAnimationFrame((n) => frame(n, ctx, device, computePipeline, renderPipeline));
 }
