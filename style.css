@@ -55,24 +55,44 @@ canvas {
   margin-bottom: 10px;
 }
 
-#materials {
+#material-picker {
   display: flex;
+  align-items: center;
   gap: 6px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
-.material-btn {
+#material-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+
+#material-filter {
   flex: 1;
-  padding: 6px 4px;
-  border: 2px solid transparent;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 4px;
-  color: #fff;
-  font-size: 11px;
-  cursor: pointer;
+  color: #eee;
+  padding: 4px 6px;
+  font-size: 12px;
 }
 
-.material-btn.active {
-  border-color: #fff;
+#materials {
+  width: 100%;
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #eee;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+#materials option {
+  padding: 3px 4px;
 }
 
 #reset-btn {

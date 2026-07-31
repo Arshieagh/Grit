@@ -16,7 +16,12 @@
       <label for="brush-size">Brush size: <span id="brush-size-value">2</span></label>
       <input type="range" id="brush-size" min="0" max="15" value="2">
 
-      <div id="materials"></div>
+      <label for="material-filter">Material</label>
+      <div id="material-picker">
+        <span id="material-swatch"></span>
+        <input type="text" id="material-filter" placeholder="Filter...">
+      </div>
+      <select id="materials" size="6"></select>
 
       <button id="reset-btn">Reset</button>
     </div>
