@@ -1,11 +1,65 @@
 struct SimUniforms {
-  data: vec4f, // x: dt, y: gravity, z: cellSize, w: rows
+  data: vec4f,  // x: dt, y: gravity, z: cellSize, w: rows
+  data2: vec4f, // x: cols, y: frameCount, zw: unused
 }
 
 @group(0) @binding(0) var<uniform> uniforms: SimUniforms;
 @group(0) @binding(1) var<storage, read_write> positions: array<vec2f>;
 @group(0) @binding(2) var<storage, read_write> velocities: array<vec2f>;
 @group(0) @binding(3) var<storage, read_write> remainders: array<vec2f>;
+@group(0) @binding(4) var<storage, read_write> grid: array<atomic<u32>>;
+@group(0) @binding(5) var<storage, read_write> velocityDeltaY: array<atomic<i32>>;
+
+const EMPTY: u32 = 0u;
+const MAX_STEPS: u32 = 8u;
+// fixed-point scale for encoding f32 velocity deltas into atomic<i32>
+// (WGSL has no atomic<f32>) - see queueVelocityDelta / pending-delta pickup
+const FIXED_SCALE: f32 = 65536.0;
+
+struct ClaimResult {
+  claimed: bool,
+  blocker: u32, // valid only when claimed == false: the occupant's particle index
+}
+
+// Atomically claims cell `idx` for particle `owner` (index + 1) if it's
+// currently empty. atomicCompareExchangeWeak can spuriously fail even when
+// the cell IS empty, so we only give up once we see a genuinely
+// non-empty old_value - and we surface who that occupant is, so the
+// caller can identify the blocker for momentum purposes.
+fn tryClaim(idx: u32, owner: u32) -> ClaimResult {
+  loop {
+    let result = atomicCompareExchangeWeak(&grid[idx], EMPTY, owner);
+    if (result.exchanged) {
+      return ClaimResult(true, 0u);
+    }
+    if (result.old_value != EMPTY) {
+      return ClaimResult(false, result.old_value - 1u);
+    }
+  }
+}
+
+// cheap integer bit-mixer (murmur3 fmix32) used to pick a pseudo-random
+// per-particle-per-frame diagonal slip order - avoids favoring one side
+// over long runs the way parity-of-index or hash-of-position would.
+fn hash_u32(x: u32) -> u32 {
+  var h = x;
+  h = h ^ (h >> 16u);
+  h = h * 0x7feb352du;
+  h = h ^ (h >> 15u);
+  h = h * 0x846ca68bu;
+  h = h ^ (h >> 16u);
+  return h;
+}
+
+// Queues a velocity change for another particle's NEXT invocation.
+// Can't write velocities[idx] directly here - that particle very likely
+// has its own invocation running concurrently in this same dispatch,
+// independently reading/writing that same slot, which would be a
+// genuine write-write race. atomicAdd on a fixed-point int is the one
+// cross-invocation-safe way to accumulate a float-ish value.
+fn queueVelocityDelta(idx: u32, delta: f32) {
+  atomicAdd(&velocityDeltaY[idx], i32(round(delta * FIXED_SCALE)));
+}
 
 @compute @workgroup_size(64)
 fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
@@ -18,32 +72,144 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   let gravity = uniforms.data.y;
   let cellSize = uniforms.data.z;
   let rows = uniforms.data.w;
+  let cols = uniforms.data2.x;
+  let frameCount = u32(uniforms.data2.y);
 
   var pos = positions[i];
   var vel = velocities[i];
   var rem = remainders[i];
 
+  // Pick up any momentum queued for us last frame by a particle that
+  // landed on top of us and couldn't write into our slot directly.
+  // atomicExchange reads-and-resets in one atomic step, so a concurrent
+  // atomicAdd from THIS frame's collisions (queued for next frame) can
+  // never be silently lost between a separate load and store.
+  let pendingFixed = atomicExchange(&velocityDeltaY[i], 0);
+  if (pendingFixed != 0) {
+    vel.y += f32(pendingFixed) / FIXED_SCALE;
+  }
+
   // gravity drives velocity, velocity accumulates into the sub-cell remainder
   vel.y += gravity * dt;
   rem += vel * dt;
 
-  // Y axis: convert however much remainder has built up into whole grid-cell steps
-  let stepsY = floor(abs(rem.y) / cellSize);
-  if (stepsY > 0.0) {
-    let dirY = sign(rem.y);
-    pos.y += dirY * stepsY * cellSize;
-    rem.y -= dirY * stepsY * cellSize;
+  var cellX = u32(floor(pos.x / cellSize));
+  var cellY = u32(floor(pos.y / cellSize));
+  var currentIdx = cellY * u32(cols) + cellX;
 
-    // floor boundary: land on the last row and stop falling
-    let maxRowCenter = (rows - 0.5) * cellSize;
-    if (pos.y >= maxRowCenter) {
-      pos.y = maxRowCenter;
-      vel.y = 0.0;
-      rem.y = 0.0;
+  // Y axis: walk one cell at a time, atomically claiming each next cell
+  // before releasing the one we're leaving. On a straight-down block by
+  // another particle, try to slip diagonally past it before giving up.
+  let stepsY = floor(abs(rem.y) / cellSize);
+  let stepsWanted = min(stepsY, f32(MAX_STEPS));
+  let dirY = sign(rem.y);
+
+  var stepsDone = 0.0;
+  var blocked = false;
+  var hitFloor = false;
+
+  for (var s = 0u; s < u32(stepsWanted); s = s + 1u) {
+    let nextRow = i32(cellY) + i32(dirY);
+    if (nextRow < 0 || f32(nextRow) >= rows) {
+      blocked = true;
+      hitFloor = true; // world edge - always a hard stop, never slips
+      break;
     }
+
+    let straightIdx = u32(nextRow) * u32(cols) + cellX;
+    let straightClaim = tryClaim(straightIdx, i + 1u);
+
+    if (straightClaim.claimed) {
+      atomicStore(&grid[currentIdx], EMPTY);
+      currentIdx = straightIdx;
+      cellY = u32(nextRow);
+      stepsDone += 1.0;
+      continue;
+    }
+
+    // Straight-down is occupied by another particle - try to slip
+    // diagonally past it before giving up.
+    let cellXi = i32(cellX);
+    let colsI = i32(cols);
+    let leftX = cellXi - 1;
+    let rightX = cellXi + 1;
+    let leftValid = leftX >= 0;
+    let rightValid = rightX < colsI;
+
+    let h = hash_u32(i ^ (frameCount * 0x9E3779B1u));
+    let tryLeftFirst = (h & 1u) == 0u;
+
+    var firstX = leftX;
+    var firstValid = leftValid;
+    var secondX = rightX;
+    var secondValid = rightValid;
+    if (!tryLeftFirst) {
+      firstX = rightX;
+      firstValid = rightValid;
+      secondX = leftX;
+      secondValid = leftValid;
+    }
+
+    var slipped = false;
+    if (firstValid) {
+      let diagIdx = u32(nextRow) * u32(cols) + u32(firstX);
+      let diagClaim = tryClaim(diagIdx, i + 1u);
+      if (diagClaim.claimed) {
+        atomicStore(&grid[currentIdx], EMPTY);
+        currentIdx = diagIdx;
+        cellX = u32(firstX);
+        cellY = u32(nextRow);
+        pos.x = (f32(cellX) + 0.5) * cellSize;
+        stepsDone += 1.0;
+        slipped = true;
+      }
+    }
+    if (!slipped && secondValid) {
+      let diagIdx = u32(nextRow) * u32(cols) + u32(secondX);
+      let diagClaim = tryClaim(diagIdx, i + 1u);
+      if (diagClaim.claimed) {
+        atomicStore(&grid[currentIdx], EMPTY);
+        currentIdx = diagIdx;
+        cellX = u32(secondX);
+        cellY = u32(nextRow);
+        pos.x = (f32(cellX) + 0.5) * cellSize;
+        stepsDone += 1.0;
+        slipped = true;
+      }
+    }
+
+    if (slipped) {
+      break; // one-shot per frame - don't chain further steps after a slip
+    }
+
+    // Both diagonals unavailable too - genuine dead stop against the
+    // particle directly below. Resolve as a soft (perfectly inelastic,
+    // equal-mass) two-way momentum exchange instead of a hard freeze.
+    blocked = true;
+    let blockerIdx = straightClaim.blocker;
+    let vBottom = velocities[blockerIdx].y; // benign read race - see plan notes
+    let vFinal = (vel.y + vBottom) * 0.5;
+    vel.y = vFinal; // our own half applies immediately (own slot, no race)
+    queueVelocityDelta(blockerIdx, vFinal - vBottom); // their half, deferred
+    break;
   }
 
-  // X axis: same logic, symmetric but currently inert (nothing sets vel.x yet)
+  pos.y = (f32(cellY) + 0.5) * cellSize;
+
+  if (blocked) {
+    rem.y = 0.0;
+    if (hitFloor) {
+      vel.y = 0.0;
+    }
+    // else: vel.y already holds the momentum-merged value set above
+  } else {
+    // only consume the cells we actually moved; leftover remainder
+    // (e.g. capped by MAX_STEPS) carries over to next frame
+    rem.y -= dirY * stepsDone * cellSize;
+  }
+
+  // X axis: same logic, symmetric but currently inert (diagonal slip
+  // writes pos.x directly and never touches rem.x/vel.x)
   let stepsX = floor(abs(rem.x) / cellSize);
   if (stepsX > 0.0) {
     let dirX = sign(rem.x);

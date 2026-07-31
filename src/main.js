@@ -12,7 +12,7 @@ async function main() {
   canvas.height = window.innerHeight;
   const { device, context, format } = await initWebGPU(canvas);
 
-  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, count, rows } = createParticleSystem(device, {
+  const { positionBuffer, colorBuffer, velocityBuffer, remainderBuffer, gridBuffer, count, cols, rows } = createParticleSystem(device, {
     count: PARTICLE_COUNT,
     width: canvas.width,
     height: canvas.height,
@@ -32,8 +32,10 @@ async function main() {
     positionBuffer,
     velocityBuffer,
     remainderBuffer,
+    gridBuffer,
     particleCount: count,
     cellSize: PARTICLE_SIZE,
+    cols,
     rows,
     gravity: GRAVITY,
   });
