@@ -1794,7 +1794,8 @@ export const MATERIALS_DATA = [
   },
 
   // ---------------------------------------------------------------
-  // Gases (data-only - gas movement not yet implemented)
+  // Gases (rise via buoyancy instead of falling - see MATTER_GAS
+  // handling in simulate.wgsl)
   // ---------------------------------------------------------------
   {
     ...MATERIAL_DEFAULTS,

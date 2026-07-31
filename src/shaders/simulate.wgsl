@@ -152,6 +152,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   let cols = uniforms.data2.x;
   let frameCount = u32(uniforms.data2.y);
   let friction = materialFriction[material];
+  let matterState = materialMatterState[material];
 
   var pos = positions[i];
   var vel = velocities[i];
@@ -167,8 +168,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     vel.y += f32(pendingFixed) / FIXED_SCALE;
   }
 
-  // gravity drives velocity, velocity accumulates into the sub-cell remainder
-  vel.y += gravity * dt;
+  // Gravity drives velocity - except for gases, which are buoyant and rise
+  // instead of fall. Same magnitude, flipped sign, rather than a separate
+  // per-material buoyancy constant: good enough to make smoke/steam behave
+  // believably without a real fluid-density model (there are no ambient
+  // "air" particles filling empty cells to buoy against). Velocity then
+  // accumulates into the sub-cell remainder as usual.
+  var effectiveGravity = gravity;
+  if (matterState == MATTER_GAS) {
+    effectiveGravity = -gravity;
+  }
+  vel.y += effectiveGravity * dt;
   rem += vel * dt;
 
   var cellX = u32(floor(pos.x / cellSize));
@@ -192,7 +202,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     let nextRow = i32(cellY) + dirYi;
     if (nextRow < 0 || f32(nextRow) >= rows) {
       blocked = true;
-      hitFloor = true; // world edge - always a hard stop, never slips
+      // world edge - the bottom for anything falling, or the top for a
+      // buoyant rising gas - always a hard stop, never slips
+      hitFloor = true;
       break;
     }
 
@@ -291,23 +303,26 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
       }
     }
 
-    // Liquids: if a material can't fall straight down OR diagonally
-    // (whether because the diagonal cell was occupied, or because it
-    // was open but rejected by the slope gate above - moot for any
-    // liquid with friction 0, since useSlopeGate is always false then),
-    // spread sideways along its current row before settling - a looser
-    // "liquid disperses" fallback solids don't get. Driven by
-    // matterState rather than a specific material ID, so every liquid
-    // (water, oil, lava, etc.) gets this, not just literally "water".
-    // Reuses the same hash-ordered left/right candidates computed above
-    // (column bounds don't depend on which row we're checking).
+    // Fluids (liquids and gases): if a material can't move straight
+    // through in its "fall" direction (down for anything gravity-bound,
+    // up for a buoyant gas) OR diagonally (whether because the diagonal
+    // cell was occupied, or because it was open but rejected by the
+    // slope gate above - moot for anything with friction 0, since
+    // useSlopeGate is always false then), spread sideways along its
+    // current row before settling - a looser "fluids disperse" fallback
+    // solids don't get. Driven by matterState rather than a specific
+    // material ID, so every liquid and gas (water, oil, lava, steam,
+    // smoke, etc.) gets this, not just literally "water". Reuses the
+    // same hash-ordered left/right candidates computed above (column
+    // bounds don't depend on which row we're checking).
     //
     // Gated by materialSpreadChance (derived from viscosity in
     // computePipeline.js): thick liquids like honey/tar/lava resist
-    // spreading, thin ones like water spread almost every attempt.
-    // Uses a DIFFERENT hash seed from the left/right ordering above, so
-    // "should I spread at all" and "which side first" don't correlate.
-    if (!slipped && materialMatterState[material] == MATTER_LIQUID) {
+    // spreading, thin ones like water and low-viscosity gases spread
+    // almost every attempt. Uses a DIFFERENT hash seed from the
+    // left/right ordering above, so "should I spread at all" and "which
+    // side first" don't correlate.
+    if (!slipped && (matterState == MATTER_LIQUID || matterState == MATTER_GAS)) {
       let spreadChance = materialSpreadChance[material];
       let spreadRoll = f32(hash_u32(i ^ (frameCount * 0x2545F491u))) / 4294967295.0;
       if (spreadRoll <= spreadChance) {
