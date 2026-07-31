@@ -1,6 +1,6 @@
 import { createBuffer } from '../gpu/buffers.js';
 
-export async function createComputePipeline(device, { positionBuffer, velocityBuffer, remainderBuffer, materialBuffer, gridBuffer, maxParticles, cellSize, cols, rows, gravity }) {
+export async function createComputePipeline(device, { positionBuffer, velocityBuffer, remainderBuffer, materialBuffer, gridBuffer, maxParticles, cellSize, cols, rows, gravity, materials }) {
   const shaderCode = await fetch('/src/shaders/simulate.wgsl').then((res) => res.text());
   const shaderModule = device.createShaderModule({ code: shaderCode });
 
@@ -18,6 +18,17 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
     label: 'Velocity Delta Y',
   });
 
+  // Per-material-TYPE properties table (NOT per-particle - that's
+  // materialBuffer/binding 6). One f32 per MATERIALS[] entry, indexed by
+  // the same materialId used everywhere else. Built once from config and
+  // never written again - materials aren't edited live, only which
+  // material a new particle gets is chosen at spawn time.
+  const materialFrictionBuffer = createBuffer(device, {
+    data: Float32Array.from(materials, (m) => m.friction),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    label: 'Material Friction Table',
+  });
+
   const bindGroupLayout = device.createBindGroupLayout({
     entries: [
       { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
@@ -27,6 +38,7 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
       { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
     ],
   });
 
@@ -40,6 +52,7 @@ export async function createComputePipeline(device, { positionBuffer, velocityBu
       { binding: 4, resource: { buffer: gridBuffer } },
       { binding: 5, resource: { buffer: velocityDeltaBuffer } },
       { binding: 6, resource: { buffer: materialBuffer } },
+      { binding: 7, resource: { buffer: materialFrictionBuffer } },
     ],
   });
 

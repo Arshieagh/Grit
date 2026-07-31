@@ -60,6 +60,7 @@ async function main() {
     cols,
     rows,
     gravity: GRAVITY,
+    materials: MATERIALS,
   });
 
   const controls = createControls({

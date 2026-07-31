@@ -10,6 +10,7 @@ struct SimUniforms {
 @group(0) @binding(4) var<storage, read_write> grid: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read_write> velocityDeltaY: array<atomic<i32>>;
 @group(0) @binding(6) var<storage, read> materials: array<u32>;
+@group(0) @binding(7) var<storage, read> materialFriction: array<f32>;
 
 const EMPTY: u32 = 0u;
 const MAX_STEPS: u32 = 8u;
@@ -21,6 +22,14 @@ const FIXED_SCALE: f32 = 65536.0;
 const MATERIAL_SAND: u32 = 0u;
 const MATERIAL_STONE: u32 = 1u;
 const MATERIAL_WATER: u32 = 2u;
+
+// Angle-of-repose heuristic tuning. When straight-down is blocked, a
+// diagonal slip is only taken if the local "height difference" between
+// the particle's own column and the candidate neighbor column is at
+// least this many cells deep - a friction-derived threshold (see
+// requiredHeightDrop). Kept small and fixed so the extra grid probing
+// this requires stays cheap and independent of actual pile height.
+const SLOPE_PROBE_DEPTH: u32 = 4u;
 
 struct ClaimResult {
   claimed: bool,
@@ -67,6 +76,52 @@ fn queueVelocityDelta(idx: u32, delta: f32) {
   atomicAdd(&velocityDeltaY[idx], i32(round(delta * FIXED_SCALE)));
 }
 
+// Treats the grid as "solid" at (colX, row): either genuinely occupied,
+// or off the top/bottom edge of the world (both edges act like an
+// immovable floor/ceiling for the purposes of measuring local pile
+// support - there's nothing beyond them to fall into).
+fn isSolid(colX: u32, row: i32, cols: u32, rows: f32) -> bool {
+  if (row < 0 || f32(row) >= rows) {
+    return true;
+  }
+  let idx = u32(row) * cols + colX;
+  return atomicLoad(&grid[idx]) != EMPTY;
+}
+
+// Counts consecutive solid cells starting at (colX, startRow) and
+// walking in the +/-row direction given by dirY, stopping at the first
+// empty cell or after SLOPE_PROBE_DEPTH cells, whichever comes first.
+// This is the cheap, fixed-cost local "pile depth" proxy used by the
+// angle-of-repose gate below: it never reads more than SLOPE_PROBE_DEPTH
+// cells, regardless of how tall the real pile in that column is.
+fn supportDepth(colX: u32, startRow: i32, dirY: i32, cols: u32, rows: f32) -> u32 {
+  var count = 0u;
+  var row = startRow;
+  loop {
+    if (count >= SLOPE_PROBE_DEPTH) {
+      break;
+    }
+    if (!isSolid(colX, row, cols, rows)) {
+      break;
+    }
+    count = count + 1u;
+    row = row + dirY;
+  }
+  return count;
+}
+
+// Maps a material's friction [0,1] onto a required height-difference
+// threshold, in cells, out of the SLOPE_PROBE_DEPTH cells we're able to
+// measure: friction near 0 needs only a 1-cell drop (moot in practice -
+// see the friction <= 0 bypass at the call site, which skips this
+// entirely), friction 1 needs the full probe depth (an extreme, steep
+// drop) before a grain will ever slip sideways. Clamped defensively in
+// case a future material's friction value strays outside [0,1].
+fn requiredHeightDrop(friction: f32) -> i32 {
+  let raw = i32(round(1.0 + friction * f32(SLOPE_PROBE_DEPTH - 1u)));
+  return clamp(raw, 1, i32(SLOPE_PROBE_DEPTH));
+}
+
 @compute @workgroup_size(64)
 fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
@@ -89,6 +144,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   let rows = uniforms.data.w;
   let cols = uniforms.data2.x;
   let frameCount = u32(uniforms.data2.y);
+  let friction = materialFriction[material];
 
   var pos = positions[i];
   var vel = velocities[i];
@@ -114,17 +170,19 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
 
   // Y axis: walk one cell at a time, atomically claiming each next cell
   // before releasing the one we're leaving. On a straight-down block by
-  // another particle, try to slip diagonally past it before giving up.
+  // another particle, try to slip diagonally past it before giving up -
+  // gated by the material's angle-of-repose friction (see below).
   let stepsY = floor(abs(rem.y) / cellSize);
   let stepsWanted = min(stepsY, f32(MAX_STEPS));
   let dirY = sign(rem.y);
+  let dirYi = i32(dirY);
 
   var stepsDone = 0.0;
   var blocked = false;
   var hitFloor = false;
 
   for (var s = 0u; s < u32(stepsWanted); s = s + 1u) {
-    let nextRow = i32(cellY) + i32(dirY);
+    let nextRow = i32(cellY) + dirYi;
     if (nextRow < 0 || f32(nextRow) >= rows) {
       blocked = true;
       hitFloor = true; // world edge - always a hard stop, never slips
@@ -143,7 +201,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     // Straight-down is occupied by another particle - try to slip
-    // diagonally past it before giving up.
+    // diagonally past it, but only if doing so wouldn't violate this
+    // material's angle of repose. homeSupport/requiredDrop are shared
+    // by both candidate sides below; friction <= 0 (water) skips the
+    // gate entirely and reproduces the old unconditional-slip behavior.
     let cellXi = i32(cellX);
     let colsI = i32(cols);
     let leftX = cellXi - 1;
@@ -165,35 +226,68 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
       secondValid = leftValid;
     }
 
+    let useSlopeGate = friction > 0.0;
+    var homeSupport: u32 = 0u;
+    var requiredDrop: i32 = 0;
+    if (useSlopeGate) {
+      // How deep the pile is directly under our current resting spot
+      // (nextRow is already known occupied, so this is always >= 1).
+      homeSupport = supportDepth(cellX, nextRow, dirYi, u32(cols), rows);
+      requiredDrop = requiredHeightDrop(friction);
+    }
+
     var slipped = false;
     if (firstValid) {
       let diagIdx = u32(nextRow) * u32(cols) + u32(firstX);
-      let diagClaim = tryClaim(diagIdx, i + 1u);
-      if (diagClaim.claimed) {
-        atomicStore(&grid[currentIdx], EMPTY);
-        currentIdx = diagIdx;
-        cellX = u32(firstX);
-        cellY = u32(nextRow);
-        pos.x = (f32(cellX) + 0.5) * cellSize;
-        stepsDone += 1.0;
-        slipped = true;
+      if (atomicLoad(&grid[diagIdx]) == EMPTY) {
+        var allowed = true;
+        if (useSlopeGate) {
+          let neighborSupport = supportDepth(u32(firstX), nextRow + dirYi, dirYi, u32(cols), rows);
+          let heightDiff = i32(homeSupport) - i32(neighborSupport);
+          allowed = heightDiff >= requiredDrop;
+        }
+        if (allowed) {
+          let diagClaim = tryClaim(diagIdx, i + 1u);
+          if (diagClaim.claimed) {
+            atomicStore(&grid[currentIdx], EMPTY);
+            currentIdx = diagIdx;
+            cellX = u32(firstX);
+            cellY = u32(nextRow);
+            pos.x = (f32(cellX) + 0.5) * cellSize;
+            stepsDone += 1.0;
+            slipped = true;
+          }
+        }
       }
     }
     if (!slipped && secondValid) {
       let diagIdx = u32(nextRow) * u32(cols) + u32(secondX);
-      let diagClaim = tryClaim(diagIdx, i + 1u);
-      if (diagClaim.claimed) {
-        atomicStore(&grid[currentIdx], EMPTY);
-        currentIdx = diagIdx;
-        cellX = u32(secondX);
-        cellY = u32(nextRow);
-        pos.x = (f32(cellX) + 0.5) * cellSize;
-        stepsDone += 1.0;
-        slipped = true;
+      if (atomicLoad(&grid[diagIdx]) == EMPTY) {
+        var allowed = true;
+        if (useSlopeGate) {
+          let neighborSupport = supportDepth(u32(secondX), nextRow + dirYi, dirYi, u32(cols), rows);
+          let heightDiff = i32(homeSupport) - i32(neighborSupport);
+          allowed = heightDiff >= requiredDrop;
+        }
+        if (allowed) {
+          let diagClaim = tryClaim(diagIdx, i + 1u);
+          if (diagClaim.claimed) {
+            atomicStore(&grid[currentIdx], EMPTY);
+            currentIdx = diagIdx;
+            cellX = u32(secondX);
+            cellY = u32(nextRow);
+            pos.x = (f32(cellX) + 0.5) * cellSize;
+            stepsDone += 1.0;
+            slipped = true;
+          }
+        }
       }
     }
 
-    // Water: if it can't fall straight down OR diagonally, spread
+    // Water: if it can't fall straight down OR diagonally (whether
+    // because the diagonal cell was occupied, or because it was open
+    // but rejected by the slope gate above - moot for water anyway
+    // since its friction is 0, so useSlopeGate is always false), spread
     // sideways along its current row before settling - a looser
     // "liquid disperses" fallback sand and stone don't get. Reuses the
     // same hash-ordered left/right candidates computed above (column
