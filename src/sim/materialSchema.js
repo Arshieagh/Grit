@@ -38,9 +38,9 @@
  * @property {'solid'|'liquid'|'gas'} matterState - default state at
  *   room temperature (~20C). Drives base movement behavior: solid
  *   particles use grid-snapped granular movement (fall + diagonal
- *   slip, gated by friction), liquid particles additionally get the
- *   sideways-spread fallback, gas is reserved for a future milestone
- *   (not yet implemented in the compute shader).
+ *   slip, gated by friction); liquid and gas particles get that same
+ *   movement plus a sideways-spread fallback when blocked, and gas
+ *   additionally rises (buoyancy) instead of falling.
  * @property {boolean} immovable - true for materials that never move
  *   regardless of matterState (e.g. Stone). Checked first in the
  *   compute shader, before matterState-driven movement rules.
